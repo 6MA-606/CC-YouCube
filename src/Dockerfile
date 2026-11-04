@@ -86,7 +86,12 @@ RUN /opt/venv/bin/pip install --no-cache-dir -U pip \
 WORKDIR /opt/server
 COPY --chown=youcube:youcube youcube/ /opt/server/
 COPY --chown=youcube:youcube docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
-RUN chmod 755 /usr/local/bin/docker-entrypoint.sh /usr/local/bin/sanjuuni
+# A fresh named volume is seeded from this directory, including ownership.
+# Create it as youcube before dropping root, or the mount stays root:root and
+# FFmpeg cannot write /opt/server/data/<id>.dfpwm.
+RUN chmod 755 /usr/local/bin/docker-entrypoint.sh /usr/local/bin/sanjuuni \
+    && mkdir -p /opt/server/data \
+    && chown youcube:youcube /opt/server/data
 
 ENV HOST=0.0.0.0 \
     PORT=5000 \
