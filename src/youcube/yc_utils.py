@@ -12,6 +12,24 @@ from re import RegexFlag
 from re import compile as re_compile
 from typing import Tuple
 
+try:
+    from orjson import dumps as _dump_json
+except ModuleNotFoundError:
+    from json import dumps as _dump_json
+
+
+def dump_json(payload) -> str:
+    """
+    Serialize a websocket payload as text.
+
+    orjson returns bytes, which Sanic would send as a binary frame. The
+    ComputerCraft client expects a text frame, so this always returns str.
+    """
+    encoded = _dump_json(payload)
+    if isinstance(encoded, bytes):
+        return encoded.decode("utf-8")
+    return encoded
+
 
 def remove_whitespace(string: str) -> str:
     """

@@ -1,11 +1,47 @@
----
+# Same stack as /docker-compose.yml, with the build context set to this directory.
+# Run from src/: docker compose up -d --build
 services:
   youcube:
     build: .
-    image: youcube
-    restart: always
-    hostname: youcube
+    image: ghcr.io/6ma-606/cc-youcube:latest
+    restart: unless-stopped
     ports:
-      - 5000:5000
-    #env_file: .env
-...
+      - "5000:5000"
+    environment:
+      YTDLP_AUTO_UPDATE: "true"
+      # YOUCUBE_TOKEN: "change-me"
+      # YTDLP_COOKIES: /cookies/cookies.txt
+      # YTDLP_PLAYER_CLIENT: "default,mweb"
+      # YTDLP_PO_TOKEN: ""
+      # YTDLP_EXTRACTOR_ARGS: "youtube:player_client=default,mweb"
+      # YTDLP_EXTRA_ARGS: "--retries 10"
+      # SPOTIPY_CLIENT_ID: ""
+      # SPOTIPY_CLIENT_SECRET: ""
+    volumes:
+      - youcube-data:/opt/server/data
+      # - ./cookies.txt:/cookies/cookies.txt:ro
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/health')",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+
+  # cloudflared:
+  #   image: cloudflare/cloudflared:latest
+  #   restart: unless-stopped
+  #   command: tunnel --no-autoupdate run
+  #   environment:
+  #     TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN}
+  #   depends_on:
+  #     youcube:
+  #       condition: service_healthy
+
+volumes:
+  youcube-data:

@@ -1,0 +1,60 @@
+# YouCube server, with an optional Cloudflare Tunnel.
+# From the repository root: docker compose up -d --build
+services:
+  youcube:
+    build: ./src
+    image: ghcr.io/6ma-606/cc-youcube:latest
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    environment:
+      YTDLP_AUTO_UPDATE: "true"
+      # Set a long random string to refuse clients that do not know it.
+      # Leave it unset for the original open behavior.
+      # YOUCUBE_TOKEN: "change-me"
+      # Netscape cookies.txt exported from a signed-in browser.
+      # YTDLP_COOKIES: /cookies/cookies.txt
+      # YTDLP_PLAYER_CLIENT: "default,mweb"
+      # PO token value in yt-dlp form, for example mweb.gvs+TOKEN
+      # YTDLP_PO_TOKEN: ""
+      # YTDLP_EXTRACTOR_ARGS: "youtube:player_client=default,mweb"
+      # YTDLP_EXTRA_ARGS: "--retries 10"
+      # SPOTIPY_CLIENT_ID: ""
+      # SPOTIPY_CLIENT_SECRET: ""
+    volumes:
+      - youcube-data:/opt/server/data
+      # - ./cookies.txt:/cookies/cookies.txt:ro
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/health')",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+
+  # Public WebSocket entry point from a machine at home.
+  # 1. Create a Cloudflare Tunnel and copy its token into CLOUDFLARE_TUNNEL_TOKEN.
+  # 2. In the tunnel's public hostname, set the service to http://youcube:5000.
+  #    Cloudflare proxies WebSocket upgrades. No extra WebSocket config is required.
+  # 3. Uncomment the service below and start the stack again.
+  # 4. Point the ComputerCraft client at wss://your.hostname/?token=YOUR_TOKEN
+  #    (omit ?token= when YOUCUBE_TOKEN is unset).
+  # You can drop the youcube ports mapping if the tunnel is the only entry point.
+  #
+  # cloudflared:
+  #   image: cloudflare/cloudflared:latest
+  #   restart: unless-stopped
+  #   command: tunnel --no-autoupdate run
+  #   environment:
+  #     TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN}
+  #   depends_on:
+  #     youcube:
+  #       condition: service_healthy
+
+volumes:
+  youcube-data:

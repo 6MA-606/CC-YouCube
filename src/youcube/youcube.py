@@ -6,7 +6,7 @@ YouCube Server
 """
 
 # built-in modules
-from asyncio import get_event_loop
+from asyncio import get_running_loop
 from base64 import b64encode
 from datetime import datetime
 from multiprocessing import Manager
@@ -18,10 +18,9 @@ from typing import Any, List, Tuple, Type, Union
 
 # optional pip module
 try:
-    from orjson import JSONDecodeError, dumps
+    from orjson import JSONDecodeError
     from orjson import loads as load_json
 except ModuleNotFoundError:
-    from json import dumps
     from json import loads as load_json
     from json.decoder import JSONDecodeError
 
@@ -36,19 +35,29 @@ from sanic import Request, Sanic, Websocket
 from sanic.compat import open_async
 from sanic.exceptions import SanicException
 from sanic.handlers import ErrorHandler
-from sanic.response import raw, text
+from sanic.response import json, raw, text
 from spotipy import MemoryCacheHandler, SpotifyClientCredentials
 from spotipy.client import Spotify
 
 # local modules
+from yc_auth import auth_enabled, client_authorized
 from yc_colours import RESET, Foreground
 from yc_download import DATA_FOLDER, FFMPEG_PATH, SANJUUNI_PATH, download
+from yc_library import list_library
 from yc_logging import NO_COLOR, setup_logging
 from yc_magic import run_function_in_thread_from_async_function
 from yc_spotify import SpotifyURLProcessor
-from yc_utils import cap_width_and_height, get_audio_name, get_video_name, is_save
+from yc_utils import (
+    cap_width_and_height,
+    dump_json,
+    get_audio_name,
+    get_video_name,
+    is_save,
+)
+from yc_ytdlp import log_ytdlp_configuration
 
-VERSION = "0.0.0-poc.1.0.2"
+# Server version can move. API_VERSION is the client protocol and stays put.
+VERSION = "0.0.0-poc.1.1.0"
 API_VERSION = "0.0.0-poc.1.0.0"  # https://commandcracker.github.io/YouCube/
 
 # one dfpwm chunk is 16 bits
@@ -204,7 +213,7 @@ class Actions:
 
     @staticmethod
     async def request_media(message: dict, resp: Websocket, request: Request):
-        loop = get_event_loop()
+        loop = get_running_loop()
         # get "url"
         url = message.get("url")
         if error := assert_resp("url", url, str):
@@ -282,6 +291,25 @@ class Actions:
         return {"action": "error", "message": "You dare not use special Characters"}
 
     @staticmethod
+    async def list_cache(message: dict, _unused, _request: Request):
+        sort = message.get("sort", "recent")
+        if error := assert_resp("sort", sort, str):
+            return error
+        if sort not in ("recent", "title"):
+            return {"action": "error", "message": "sort must be recent or title"}
+
+        offset = message.get("offset", 0)
+        if error := assert_resp("offset", offset, int):
+            return error
+        limit = message.get("limit", 50)
+        if error := assert_resp("limit", limit, int):
+            return error
+        search = message.get("search", "")
+        if error := assert_resp("search", search, str):
+            return error
+        return list_library(sort=sort, offset=offset, limit=limit, search=search)
+
+    @staticmethod
     async def handshake(*_unused):
         return {
             "action": "handshake",
@@ -338,15 +366,18 @@ def data_cache_cleaner(data: dict):
     try:
         while True:
             sleep(DATA_CACHE_CLEANUP_INTERVAL)
-            for file_name, last_used in data.items():
-                if (
-                    datetime.now() - last_used
-                ).total_seconds() > DATA_CACHE_CLEANUP_AFTER:
-                    file_path = join(DATA_FOLDER, file_name)
-                    if exists(file_path):
-                        remove(file_path)
-                        logger.debug('Deleted "%s"', file_name)
-                    data.pop(file_name)
+            stale_names = [
+                file_name
+                for file_name, last_used in list(data.items())
+                if (datetime.now() - last_used).total_seconds()
+                > DATA_CACHE_CLEANUP_AFTER
+            ]
+            for file_name in stale_names:
+                file_path = join(DATA_FOLDER, file_name)
+                if exists(file_path):
+                    remove(file_path)
+                    logger.debug('Deleted "%s"', file_name)
+                data.pop(file_name, None)
 
     except KeyboardInterrupt:
         pass
@@ -378,18 +409,40 @@ async def main_start(app: Sanic):
     else:
         logger.info("Spotipy Disabled")
 
+    if auth_enabled():
+        logger.info("Shared-secret auth is enabled")
+    else:
+        logger.info("Shared-secret auth is disabled")
+
+    log_ytdlp_configuration()
+
+
+def _unauthorized():
+    """Reject an HTTP request when the shared secret does not match."""
+    return text("Unauthorized", status=401)
+
+
+@app.get("/health")
+async def health(_request: Request):
+    """Liveness probe. Always open, including when YOUCUBE_TOKEN is set."""
+    return json({"status": "ok"})
+
 
 @app.route("/dfpwm/<media_id:str>/<chunkindex:int>")
-async def stream_dfpwm(_request: Request, media_id: str, chunkindex: int):
+async def stream_dfpwm(request: Request, media_id: str, chunkindex: int):
     """WIP HTTP mode"""
+    if not client_authorized(request):
+        return _unauthorized()
     return raw(await getchunk(join(DATA_FOLDER, get_audio_name(media_id)), chunkindex))
 
 
 @app.route("/32vid/<media_id:str>/<width:int>/<height:int>/<tracker:int>")  # , stream=True
 async def stream_32vid(
-    _request: Request, media_id: str, width: int, height: int, tracker: int
+    request: Request, media_id: str, width: int, height: int, tracker: int
 ):
     """WIP HTTP mode"""
+    if not client_authorized(request):
+        return _unauthorized()
     return raw(
         "\n".join(
             await get_vid(join(DATA_FOLDER, get_video_name(media_id, width, height)), tracker)
@@ -442,23 +495,44 @@ async def wshandler(request: Request, ws: Websocket):
     else:
         prefix = f"{Foreground.BLUE}[{request.client_ip}]{RESET} "
 
+    if not client_authorized(request):
+        logger.warning("%sRejected: missing or invalid token", prefix)
+        await ws.send(
+            dump_json({"action": "error", "message": "Unauthorized"})
+        )
+        await ws.close()
+        return
+
     logger.info("%sConnected!", prefix)
 
     logger.debug("%sMy headers are: %s", prefix, request.headers)
 
     while True:
         message = await ws.recv()
+        if message is None:
+            logger.info("%sDisconnected!", prefix)
+            break
+
         logger.debug("%sMessage: %s", prefix, message)
 
         try:
-            message: dict = load_json(message)
+            message = load_json(message)
         except JSONDecodeError:
             logger.debug("%sFaild to parse Json", prefix)
-            await ws.send(dumps({"action": "error", "message": "Faild to parse Json"}))
+            await ws.send(
+                dump_json({"action": "error", "message": "Faild to parse Json"})
+            )
+            continue
+
+        if not isinstance(message, dict):
+            await ws.send(
+                dump_json({"action": "error", "message": "Faild to parse Json"})
+            )
+            continue
 
         if message.get("action") in actions:
             response = await actions[message.get("action")](message, ws, request)
-            await ws.send(dumps(response))
+            await ws.send(dump_json(response))
 
 
 def main() -> None:

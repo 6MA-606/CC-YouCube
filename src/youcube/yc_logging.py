@@ -21,6 +21,7 @@ from logging import (
 from os import getenv
 
 # local modules
+from yc_auth import install_secret_redaction
 from yc_colours import RESET, Foreground
 
 LOGLEVEL = getenv("LOGLEVEL") or DEBUG
@@ -85,6 +86,7 @@ class YTDLPLogger:
 
 def setup_logging() -> Logger:
     """Sets the main logger up"""
+    install_secret_redaction()
     logger.setLevel(LOGLEVEL)
 
     # noinspection SpellCheckingInspection
