@@ -1,86 +1,105 @@
-FROM ghcr.io/commandcracker/ffmpeg:latest AS ffmpeg
+# syntax=docker/dockerfile:1
+# YouCube server image: Python 3.12, FFmpeg (DFPWM), sanjuuni, Node.js, latest yt-dlp.
+# OpenCL is off by default. Build with --build-arg ENABLE_OPENCL=true to compile
+# sanjuuni with OpenCL headers (still needs a GPU ICD at runtime).
 
-FROM ffmpeg AS sanjuuni
+FROM python:3.12-slim-bookworm AS sanjuuni
 
-ENV SANJUUNI_VERSION=49cb275d4ef64d2bee3d5d2cbc5baf47787bedc2
+ARG ENABLE_OPENCL=false
+ARG SANJUUNI_COMMIT=148e68e776e08d0ac465c965371dfc21391023e0
+ARG SANJUUNI_SHA512=945f343738489996ac04808cc99393cc020463284f78db4b22dc46608e6addf7bc608c11117959a6519e5c8d5aa00629d4d39ca629a4956503b1671dd93d615f
 
-ARG SANJUUNI_SHA512SUM="22c85f9a5c16c0acb4dde971b64f53e765a8d607065e7a25115103925124e33a0680da3790e85c4343b7d320a0170b6ae096ec7f2b48b22582cf96681fd3a78c *sanjuuni.tar.gz"
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        pkg-config \
+        wget \
+        zlib1g-dev \
+        libpoco-dev \
+        libavcodec-dev \
+        libavdevice-dev \
+        libavfilter-dev \
+        libavformat-dev \
+        libavutil-dev \
+        libswresample-dev \
+        libswscale-dev \
+    && if [ "$ENABLE_OPENCL" = "true" ]; then \
+        apt-get install -y --no-install-recommends \
+            ocl-icd-opencl-dev \
+            opencl-c-headers \
+            opencl-clhpp-headers; \
+    fi \
+    && rm -rf /var/lib/apt/lists/*
 
-SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
+WORKDIR /src
+RUN wget -q -O sanjuuni.tar.gz \
+        "https://github.com/MCJack123/sanjuuni/archive/${SANJUUNI_COMMIT}.tar.gz" \
+    && echo "${SANJUUNI_SHA512}  sanjuuni.tar.gz" | sha512sum -c - \
+    && tar -xzf sanjuuni.tar.gz --strip-components=1 \
+    && ./configure \
+    && make -j"$(nproc)"
 
-RUN set -eux; \
-  apk add --no-cache --update \
-  g++ \
-  zlib-dev \
-  poco-dev \
-  make; \
-  wget -q --output-document=sanjuuni.tar.gz https://github.com/MCJack123/sanjuuni/archive/${SANJUUNI_VERSION}.tar.gz; \
-  echo "${SANJUUNI_SHA512SUM}" | sha512sum -c -; \
-  mkdir --parents sanjuuni; \
-  tar --extract --directory sanjuuni --strip-components=1 --file=sanjuuni.tar.gz; \
-  rm sanjuuni.tar.gz;
+FROM python:3.12-slim-bookworm
 
-WORKDIR /sanjuuni
+ARG ENABLE_OPENCL=false
+ARG NODE_VERSION=22.23.4
 
-RUN set -eux; \
-  ./configure; \
-  make
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        ffmpeg \
+        libpoco-dev \
+        wget \
+        xz-utils \
+    && if [ "$ENABLE_OPENCL" = "true" ]; then \
+        apt-get install -y --no-install-recommends ocl-icd-libopencl1; \
+    fi \
+    && arch="$(dpkg --print-architecture)" \
+    && case "$arch" in \
+        amd64) node_arch=x64 ;; \
+        arm64) node_arch=arm64 ;; \
+        *) echo "unsupported architecture: $arch" >&2; exit 1 ;; \
+    esac \
+    && wget -q -O node.tar.xz \
+        "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${node_arch}.tar.xz" \
+    && wget -q -O SHASUMS256.txt \
+        "https://nodejs.org/dist/v${NODE_VERSION}/SHASUMS256.txt" \
+    && grep "node-v${NODE_VERSION}-linux-${node_arch}.tar.xz" SHASUMS256.txt \
+        | sha256sum -c - \
+    && tar -xJf node.tar.xz -C /usr/local --strip-components=1 \
+    && rm node.tar.xz SHASUMS256.txt \
+    && rm -rf /var/lib/apt/lists/*
 
-FROM ghcr.io/commandcracker/alpine-pypy3.10-pip:3.20.1-pypy-7.3.14-pip-24.1.1 AS builder
+COPY --from=sanjuuni /src/sanjuuni /usr/local/bin/sanjuuni
 
-WORKDIR /
+RUN useradd --uid 1000 --create-home --shell /usr/sbin/nologin youcube \
+    && python -m venv /opt/venv \
+    && mkdir -p /opt/server \
+    && chown -R youcube:youcube /opt/venv /opt/server
 
-COPY requirements.txt .
-COPY youcube ./youcube
-COPY compile.py .
-
-RUN set -eux; \
-  apk add --no-cache --update build-base; \
-  pip install --no-cache-dir -U setuptools -r requirements.txt; \
-  python3 compile.py; \
-  pip uninstall pip -y
-
-FROM alpine:3.20.1
+COPY requirements.txt /tmp/requirements.txt
+RUN /opt/venv/bin/pip install --no-cache-dir -U pip \
+    && /opt/venv/bin/pip install --no-cache-dir -r /tmp/requirements.txt \
+    && /opt/venv/bin/pip install --no-cache-dir -U yt-dlp yt-dlp-ejs \
+    && rm /tmp/requirements.txt \
+    && chown -R youcube:youcube /opt/venv
 
 WORKDIR /opt/server
+COPY --chown=youcube:youcube youcube/ /opt/server/
+COPY --chown=youcube:youcube docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod 755 /usr/local/bin/docker-entrypoint.sh /usr/local/bin/sanjuuni
 
-RUN set -eux; \
-  apk add --no-cache --update \
-  # CVE-2024-5535 TODO: remove when base image is updated
-  openssl \
-  # pypy requirements
-  libffi libbz2 \
-  # sanjuuni requirements
-  poco \
-  # ffmpeg requirements
-  libgcc \
-  libstdc++ \
-  ca-certificates \
-  libgomp \
-  expat; \
-  apk add --no-cache --repository=http://dl-cdn.alpinelinux.org/alpine/v3.18/community libssl1.1=1.1.1u-r1 libcrypto1.1=1.1.1u-r1; \
-  chown 1000:1000 /opt/server/
+ENV HOST=0.0.0.0 \
+    PORT=5000 \
+    PATH="/opt/venv/bin:${PATH}" \
+    XDG_CACHE_HOME=/opt/server/.cache \
+    YTDLP_AUTO_UPDATE=true \
+    FFMPEG_PATH=ffmpeg \
+    SANJUUNI_PATH=sanjuuni
 
-COPY --from=builder /opt/pypy /opt/pypy
-# add ffmpeg
-COPY --from=ffmpeg /usr/local /usr/local
-# add sanjuuni
-COPY --from=sanjuuni /sanjuuni/sanjuuni /usr/local/bin
+USER youcube
+EXPOSE 5000
 
-ENV \
-  # Make sure, that the container is accessible from outside
-  HOST=0.0.0.0 \
-  # Make sure we use the virtualenv:
-  PATH="/opt/pypy/bin:$PATH" \
-  # Use ffmpeg libs
-  LD_LIBRARY_PATH=/usr/local/lib:/usr/local/lib64 \
-  # yt-dlp cache dir
-  XDG_CACHE_HOME="/opt/server/.yt-dlp-cache" \
-  # FIXME: Add UVLOOP support for alpine pypy
-  SANIC_NO_UVLOOP=true
+HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
+    CMD python -c "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:%s/health' % os.environ.get('PORT', '5000'))"
 
-USER 1000:1000
-
-COPY --from=builder /youcube/__pycache__ /opt/server
-
-ENTRYPOINT ["python3", "youcube.pyc"]
+ENTRYPOINT ["docker-entrypoint.sh"]

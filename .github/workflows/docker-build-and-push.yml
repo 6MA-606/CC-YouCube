@@ -4,73 +4,49 @@ on:
     workflow_dispatch:
     push:
         branches: [main]
-        paths:
-            - "src/**"
+    schedule:
+        # Weekly rebuild so the image picks up a current yt-dlp.
+        - cron: "0 6 * * 1"
+
+concurrency:
+    group: docker-publish-${{ github.ref }}
+    cancel-in-progress: false
 
 env:
     REGISTRY: ghcr.io
-    IMAGE_NAME: ${{ github.repository }}
+    IMAGE_NAME: ghcr.io/6ma-606/cc-youcube
 
 jobs:
-    build-and-publish-alpine:
+    build-and-publish:
         runs-on: ubuntu-latest
         permissions:
             contents: read
             packages: write
 
         steps:
-            - name: Checkout 🛎️
-              uses: actions/checkout@v3
+            - name: Checkout
+              uses: actions/checkout@v4
 
-            - name: Login to container registry 🔐
-              uses: docker/login-action@v2
+            - name: Login to GHCR
+              uses: docker/login-action@v3
               with:
                   registry: ${{ env.REGISTRY }}
                   username: ${{ github.actor }}
                   password: ${{ secrets.GITHUB_TOKEN }}
 
-            - name: Extract metadata 🏷️
+            - name: Extract metadata
               id: meta
-              uses: docker/metadata-action@v4
+              uses: docker/metadata-action@v5
               with:
-                  images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+                  images: ${{ env.IMAGE_NAME }}
+                  tags: |
+                      type=raw,value=latest
+                      type=sha,prefix=
 
-            - name: 🔨 Build and Publish alpine 🚀
-              uses: docker/build-push-action@v3
+            - name: Build and push
+              uses: docker/build-push-action@v6
               with:
                   context: src
                   push: true
-                  tags: ${{ env.REGISTRY }}/cc-youcube/youcube:latest,${{ env.REGISTRY }}/cc-youcube/youcube:alpine
-                  labels: ${{ steps.meta.outputs.labels }}
-
-    build-and-publish-nvidia:
-        runs-on: ubuntu-latest
-        permissions:
-            contents: read
-            packages: write
-
-        steps:
-            - name: Checkout 🛎️
-              uses: actions/checkout@v3
-
-            - name: Login to container registry 🔐
-              uses: docker/login-action@v2
-              with:
-                  registry: ${{ env.REGISTRY }}
-                  username: ${{ github.actor }}
-                  password: ${{ secrets.GITHUB_TOKEN }}
-
-            - name: Extract metadata 🏷️
-              id: meta
-              uses: docker/metadata-action@v4
-              with:
-                  images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-
-            - name: 🔨 Build and Publish nvidia 🚀
-              uses: docker/build-push-action@v3
-              with:
-                  file: src/Dockerfile.nvidia
-                  context: src
-                  push: true
-                  tags: ${{ env.REGISTRY }}/cc-youcube/youcube:ubuntu-nvidia
+                  tags: ${{ steps.meta.outputs.tags }}
                   labels: ${{ steps.meta.outputs.labels }}

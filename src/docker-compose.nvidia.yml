@@ -1,14 +1,20 @@
----
+# Optional OpenCL build of the same image. A GPU ICD must exist at runtime
+# or sanjuuni falls back to the CPU. Prefer the default image on a home server.
 services:
   youcube:
     build:
       context: .
-      dockerfile: Dockerfile.nvidia
-    image: youcube:nvidia
-    restart: always
-    hostname: youcube
+      dockerfile: Dockerfile
+      args:
+        ENABLE_OPENCL: "true"
+    image: ghcr.io/6ma-606/cc-youcube:opencl
+    restart: unless-stopped
     ports:
-      - 5000:5000
-    #env_file: .env
-    runtime: nvidia
-...
+      - "5000:5000"
+    environment:
+      YTDLP_AUTO_UPDATE: "true"
+    volumes:
+      - youcube-data:/opt/server/data
+
+volumes:
+  youcube-data:

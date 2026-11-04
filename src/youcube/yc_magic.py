@@ -111,14 +111,19 @@ def run_with_live_output(cmd: list, handler: Callable[[str], None]) -> int:
 
         def live_output():
             line = []
-            while True:
-                read = process.stderr.read(1)
-                if read in (b"\r", b"\n"):  # handle \n and \r as new line characters
-                    if len(line) != 0:  # ignore empty line
-                        handler("".join(line))
-                        line.clear()
-                else:
-                    line.append(read.decode("utf-8"))
+            try:
+                while True:
+                    read = process.stderr.read(1)
+                    if read in (b"\r", b"\n"):  # handle \n and \r as new line characters
+                        if len(line) != 0:  # ignore empty line
+                            handler("".join(line))
+                            line.clear()
+                    elif read == b"":
+                        break
+                    else:
+                        line.append(read.decode("utf-8"))
+            except (SystemExit, OSError):
+                pass
 
         thread = KillableThread(target=live_output)
         thread.start()
