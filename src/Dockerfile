@@ -3,7 +3,7 @@
 # OpenCL is off by default. Build with --build-arg ENABLE_OPENCL=true to compile
 # sanjuuni with OpenCL headers (still needs a GPU ICD at runtime).
 
-FROM python:3.12-slim-bookworm AS sanjuuni
+FROM python:3.12-slim-trixie AS sanjuuni
 
 ARG ENABLE_OPENCL=false
 ARG SANJUUNI_COMMIT=148e68e776e08d0ac465c965371dfc21391023e0
@@ -39,7 +39,7 @@ RUN wget -q -O sanjuuni.tar.gz \
     && ./configure \
     && make -j"$(nproc)"
 
-FROM python:3.12-slim-bookworm
+FROM python:3.12-slim-trixie
 
 ARG ENABLE_OPENCL=false
 ARG NODE_VERSION=22.23.4
@@ -59,14 +59,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         arm64) node_arch=arm64 ;; \
         *) echo "unsupported architecture: $arch" >&2; exit 1 ;; \
     esac \
-    && wget -q -O node.tar.xz \
+    && wget -q -O "node-v${NODE_VERSION}-linux-${node_arch}.tar.xz" \
         "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${node_arch}.tar.xz" \
     && wget -q -O SHASUMS256.txt \
         "https://nodejs.org/dist/v${NODE_VERSION}/SHASUMS256.txt" \
     && grep "node-v${NODE_VERSION}-linux-${node_arch}.tar.xz" SHASUMS256.txt \
         | sha256sum -c - \
-    && tar -xJf node.tar.xz -C /usr/local --strip-components=1 \
-    && rm node.tar.xz SHASUMS256.txt \
+    && tar -xJf "node-v${NODE_VERSION}-linux-${node_arch}.tar.xz" -C /usr/local --strip-components=1 \
+    && rm "node-v${NODE_VERSION}-linux-${node_arch}.tar.xz" SHASUMS256.txt \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=sanjuuni /src/sanjuuni /usr/local/bin/sanjuuni
