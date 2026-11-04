@@ -43,6 +43,7 @@ from spotipy.client import Spotify
 from yc_auth import auth_enabled, client_authorized
 from yc_colours import RESET, Foreground
 from yc_download import DATA_FOLDER, FFMPEG_PATH, SANJUUNI_PATH, download
+from yc_library import list_library
 from yc_logging import NO_COLOR, setup_logging
 from yc_magic import run_function_in_thread_from_async_function
 from yc_spotify import SpotifyURLProcessor
@@ -288,6 +289,25 @@ class Actions:
             return {"action": "vid", "lines": await get_vid(file, tracker)}
 
         return {"action": "error", "message": "You dare not use special Characters"}
+
+    @staticmethod
+    async def list_cache(message: dict, _unused, _request: Request):
+        sort = message.get("sort", "recent")
+        if error := assert_resp("sort", sort, str):
+            return error
+        if sort not in ("recent", "title"):
+            return {"action": "error", "message": "sort must be recent or title"}
+
+        offset = message.get("offset", 0)
+        if error := assert_resp("offset", offset, int):
+            return error
+        limit = message.get("limit", 50)
+        if error := assert_resp("limit", limit, int):
+            return error
+        search = message.get("search", "")
+        if error := assert_resp("search", search, str):
+            return error
+        return list_library(sort=sort, offset=offset, limit=limit, search=search)
 
     @staticmethod
     async def handshake(*_unused):

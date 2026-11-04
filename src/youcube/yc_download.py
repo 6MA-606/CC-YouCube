@@ -27,6 +27,7 @@ from yc_utils import (
     remove_ansi_escape_codes,
     remove_whitespace,
 )
+from yc_library import download_url_for_cache, record_playback, serve_cached_request
 from yc_ytdlp import apply_yt_dlp_options, explain_download_error
 
 # pip modules
@@ -159,6 +160,11 @@ def download(
     if width and height:
         width, height = cap_width_and_height(width, height)
 
+    cached = serve_cached_request(url, width, height, is_video)
+    if cached is not None:
+        return cached
+    url = download_url_for_cache(url)
+
     def my_hook(info):
         """https://github.com/yt-dlp/yt-dlp#adding-logger-and-progress-hook"""
         if info.get("status") == "downloading":
@@ -202,7 +208,7 @@ def download(
             return {"action": "error", "message": explain_download_error(exc)}, []
 
 
-def _download_impl(  # pylint: disable=too-many-arguments,too-many-locals,too-many-branches
+def _download_impl(  # pylint: disable=too-many-arguments,too-many-locals,too-many-branches,too-many-statements
     url,
     resp,
     loop,
@@ -321,4 +327,11 @@ def _download_impl(  # pylint: disable=too-many-arguments,too-many-locals,too-ma
     if is_video:
         files.append(get_video_name(media_id, width, height))
 
+    record_playback(
+        media_id,
+        title=data.get("title"),
+        uploader=data.get("uploader") or data.get("channel"),
+        duration=data.get("duration"),
+        url=data.get("webpage_url") or url,
+    )
     return out, files

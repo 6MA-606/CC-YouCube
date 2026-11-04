@@ -2,7 +2,7 @@
 
 Fork of [CC-YouCube/server](https://github.com/CC-YouCube/server). Upstream was archived in May 2025. This fork keeps the official YouCube ComputerCraft client working against current YouTube.
 
-The websocket protocol is unchanged. `api.version` is still `0.0.0-poc.1.0.0`, and the actions are still `handshake`, `request_media`, `get_chunk`, and `get_vid`. With `YOUCUBE_TOKEN` unset, an unmodified official client connects exactly as before.
+`api.version` is still `0.0.0-poc.1.0.0`. The original actions are unchanged: `handshake`, `request_media`, `get_chunk`, and `get_vid`. With `YOUCUBE_TOKEN` unset, an unmodified official client connects exactly as before. One additive action, `list_cache`, lists cached media. Old clients never send it.
 
 ## What changed compared with upstream
 
@@ -13,6 +13,7 @@ The websocket protocol is unchanged. `api.version` is still `0.0.0-poc.1.0.0`, a
 - Optional shared secret (`YOUCUBE_TOKEN`). Open by default.
 - `GET /health` for probes. It does not require the token.
 - Websocket JSON is always a text frame, including when orjson is installed.
+- Cached media keeps a `library.json` index (title, uploader, duration, URL, first cached, last played). Nothing in that index deletes files. `list_cache` lists the cache, including files saved before the index existed.
 - Published image: `ghcr.io/6ma-606/cc-youcube`. GitHub Actions builds it on every push to `main` and every Monday.
 
 ## Requirements
@@ -120,6 +121,47 @@ YouTube often refuses datacenter and home IPs until the request looks like a log
 3. If yt-dlp asks for a PO token or a different player client, set `YTDLP_PO_TOKEN` and `YTDLP_PLAYER_CLIENT`, or pass the same values through `YTDLP_EXTRACTOR_ARGS`.
 
 Treat the cookies file like a password. It is a live session for that Google account.
+
+## Library (`list_cache`)
+
+Successful `request_media` calls write `library.json` next to the media files. The record stores title, uploader, duration in seconds, the original URL, `first_cached`, and `last_played`. `last_played` is updated on every play, including when the audio file is already on disk. The write replaces the file atomically. This index never deletes media.
+
+A later `request_media` whose `url` is the cached video id, a YouTube watch URL for that id, or the stored URL, returns the cached media and does not download again when the needed audio (and video size, if requested) is already present.
+
+`list_cache` request:
+
+```json
+{"action": "list_cache", "sort": "recent", "offset": 0, "limit": 50, "search": ""}
+```
+
+`sort` is `recent` (default, newest `last_played` first) or `title`. `offset` and `limit` page the filtered list (`limit` max 200). `search` is a case-insensitive substring of the title.
+
+Response:
+
+```json
+{
+  "action": "list_cache",
+  "total": 1,
+  "offset": 0,
+  "limit": 50,
+  "sort": "recent",
+  "entries": [
+    {
+      "id": "58TbfRY2R8Y",
+      "title": "Example",
+      "uploader": "Channel",
+      "duration": 212,
+      "url": "https://www.youtube.com/watch?v=58TbfRY2R8Y",
+      "has_audio": true,
+      "video_sizes": [{"width": 158, "height": 72}],
+      "total_bytes": 1048576,
+      "last_played": "2026-11-04T14:00:00Z"
+    }
+  ]
+}
+```
+
+Files that were cached before this index existed are still listed. Their title is the video id, and `uploader`, `duration`, `url`, and `last_played` are empty or null until something plays them. Playing a listed id is a normal `request_media` with `"url"` set to that id.
 
 ## Development
 
